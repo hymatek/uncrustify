@@ -7,6 +7,11 @@ name: Release (Ubuntu 24.04)
 # Once proven, a `push: tags` trigger can be added.
 
 on:
+  # TEMP (remove before merging to master): auto-run on every push to the
+  # development branch so we can iterate without touching master.
+  push:
+    branches:
+      - ci/release-ubuntu-24.04
   workflow_dispatch:
     inputs:
       ref:
@@ -22,10 +27,19 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      - name: Resolve ref to build
+        id: ref
+        run: |
+          # inputs.ref is only set on workflow_dispatch; default it for push runs.
+          ref="${{ inputs.ref }}"
+          ref="${ref:-uncrustify-0.82.0}"
+          echo "Building ref: $ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - name: Checkout (full history + tags for version string)
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ steps.ref.outputs.ref }}
           fetch-depth: 0          # make_version.py uses `git describe`
           fetch-tags: true
 
@@ -44,7 +58,7 @@ jobs:
           version="$(./build/uncrustify --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
           echo "Built uncrustify version: $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          expected="${{ inputs.ref }}"
+          expected="${{ steps.ref.outputs.ref }}"
           expected="${expected#uncrustify-}"
           if [ "$version" != "$expected" ]; then
             echo "::error::Built version '$version' does not match expected '$expected'"
@@ -85,7 +99,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${{ inputs.ref }}"
+          tag="${{ steps.ref.outputs.ref }}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" \
               --title "$tag" \
