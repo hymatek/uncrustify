@@ -7,11 +7,6 @@ name: Release (Ubuntu 24.04)
 # Once proven, a `push: tags` trigger can be added.
 
 on:
-  # TEMP (remove before merging to master): auto-run on every push to the
-  # development branch so we can iterate without touching master.
-  push:
-    branches:
-      - ci/release-ubuntu-24.04
   workflow_dispatch:
     inputs:
       ref:
