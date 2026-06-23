@@ -1,0 +1,107 @@
+name: Release (Ubuntu 24.04)
+
+# Builds a pinned uncrustify release on ubuntu-24.04 and publishes the binary
+# as a GitHub Release asset, for reuse by other repos' ubuntu-24.04 CI runners.
+#
+# Manual-only for now: run from the Actions tab and pick the tag to build.
+# Once proven, a `push: tags` trigger can be added.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag (or ref) to build"
+        required: true
+        default: "uncrustify-0.82.0"
+
+permissions:
+  contents: write   # needed to create the GitHub Release and upload assets
+
+jobs:
+  build-release:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Resolve ref to build
+        id: ref
+        run: |
+          # inputs.ref is only set on workflow_dispatch; default it for push runs.
+          ref="${{ inputs.ref }}"
+          ref="${ref:-uncrustify-0.82.0}"
+          echo "Building ref: $ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout (full history + tags for version string)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+          fetch-depth: 0          # make_version.py uses `git describe`
+          fetch-tags: true
+
+      - name: Configure (Release)
+        run: |
+          cmake -B build -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)"
+
+      - name: Sanity-check version
+        id: ver
+        run: |
+          ./build/uncrustify --version
+          version="$(./build/uncrustify --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          echo "Built uncrustify version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          expected="${{ steps.ref.outputs.ref }}"
+          expected="${expected#uncrustify-}"
+          if [ "$version" != "$expected" ]; then
+            echo "::error::Built version '$version' does not match expected '$expected'"
+            exit 1
+          fi
+
+      - name: Stage install tree
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          prefix="${PWD}/stage/uncrustify-${version}-linux-x86_64"
+          cmake --install build --prefix "$prefix"
+          cp LICENSE "$prefix/" 2>/dev/null || true
+          ls -R "$prefix"
+
+      - name: Package
+        id: pkg
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          name="uncrustify-${version}-linux-x86_64"
+          tar -C stage -czf "${name}.tar.gz" "${name}"
+          cp "stage/${name}/bin/uncrustify" "uncrustify-${version}-linux-x86_64"
+          sha256sum "${name}.tar.gz" "uncrustify-${version}-linux-x86_64" > "${name}.sha256"
+          echo "tarball=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "binary=uncrustify-${version}-linux-x86_64" >> "$GITHUB_OUTPUT"
+          echo "checksums=${name}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact (for in-Actions consumers)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: uncrustify-${{ steps.ver.outputs.version }}-linux-x86_64
+          path: |
+            ${{ steps.pkg.outputs.tarball }}
+            ${{ steps.pkg.outputs.binary }}
+            ${{ steps.pkg.outputs.checksums }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.ref.outputs.ref }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "$tag" \
+              --notes "Automated ubuntu-24.04 build of \`$tag\` for reuse in downstream CI."
+          fi
+          gh release upload "$tag" \
+            "${{ steps.pkg.outputs.tarball }}" \
+            "${{ steps.pkg.outputs.binary }}" \
+            "${{ steps.pkg.outputs.checksums }}" \
+            --clobber
